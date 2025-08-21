@@ -129,17 +129,17 @@ class AmaranLight(LightEntity):
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
             kelvin = kwargs[ATTR_COLOR_TEMP_KELVIN]
-            # These are the actual CCT values from HA's white temp slider
-            actual_cct_values = [2000, 2700, 3000, 4000, 5000, 6500]
+            # Check if this is from the color picker (4667, 7333, 10000) vs temp slider
+            suspicious_cct = kelvin in [4667, 7333, 10000]
 
-            if kelvin in actual_cct_values:
-                # Real CCT command
+            if suspicious_cct and self._saturation > 0:
+                # Color picker sending wrong CCT - stay in HSI
+                _LOGGER.debug(f"Ignoring color picker CCT {kelvin}K")
+            else:
+                # Real CCT from temp slider
                 _LOGGER.debug(f"Setting CCT: {kelvin}K")
                 self._attr_color_mode = ColorMode.COLOR_TEMP
                 await self._api.set_cct(self._device_id, kelvin)
-            else:
-                # HA sending CCT for a color - ignore it
-                _LOGGER.debug(f"Ignoring pseudo-CCT {kelvin}K, keeping current mode")
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off light."""
