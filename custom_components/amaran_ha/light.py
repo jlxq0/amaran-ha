@@ -48,6 +48,9 @@ class AmaranLight(LightEntity):
         self._gm = 0
         self._available = True
 
+        # Track last set mode to ignore device's fake HSI values
+        self._last_set_mode = ColorMode.COLOR_TEMP
+
         # Color mode tracking
         self._attr_supported_color_modes = {ColorMode.COLOR_TEMP, ColorMode.HS}
         self._attr_color_mode = ColorMode.COLOR_TEMP
@@ -75,22 +78,32 @@ class AmaranLight(LightEntity):
                 brightness_percent = state.get("brightness", 0)
                 self._attr_brightness = int(brightness_percent * 2.55)
 
-                # Always store both CCT and HSI values from device
+                # Store raw values
                 cct = state.get("cct", 5500)
                 hue = state.get("hue", 0)
                 sat = state.get("sat", 0)
                 self._gm = state.get("gm", 0)
 
-                # Determine active color mode based on saturation
-                # Low saturation indicates CCT mode
-                if sat <= 10:
+                # Use last explicitly set mode, don't trust device's HSI values in CCT mode
+                if self._last_set_mode == ColorMode.COLOR_TEMP:
                     self._attr_color_mode = ColorMode.COLOR_TEMP
                     self._attr_color_temp_kelvin = cct
                     self._attr_hs_color = None
                 else:
-                    self._attr_color_mode = ColorMode.HS
-                    self._attr_hs_color = (hue, sat)
-                    self._attr_color_temp_kelvin = None
+                    # Only switch to HS mode if we explicitly set it or saturation is very high
+                    if sat > 85:  # High saturation definitely means HSI mode
+                        self._attr_color_mode = ColorMode.HS
+                        self._attr_hs_color = (hue, sat)
+                        self._attr_color_temp_kelvin = None
+                        self._last_set_mode = ColorMode.HS
+                    else:
+                        # Low/medium saturation - keep current mode
+                        if self._attr_color_mode == ColorMode.COLOR_TEMP:
+                            self._attr_color_temp_kelvin = cct
+                            self._attr_hs_color = None
+                        else:
+                            self._attr_hs_color = (hue, sat)
+                            self._attr_color_temp_kelvin = None
 
                 _LOGGER.debug(
                     f"Updated state - Mode: {self._attr_color_mode}, "
@@ -130,6 +143,7 @@ class AmaranLight(LightEntity):
                     _LOGGER.warning(f"Failed to set color temperature for {self._device_id}")
                 else:
                     # Update state for COLOR_TEMP mode
+                    self._last_set_mode = ColorMode.COLOR_TEMP
                     self._attr_color_mode = ColorMode.COLOR_TEMP
                     self._attr_color_temp_kelvin = kelvin
                     self._attr_hs_color = None
@@ -148,6 +162,7 @@ class AmaranLight(LightEntity):
                     _LOGGER.warning(f"Failed to set HSI color for {self._device_id}")
                 else:
                     # Update state for HS mode
+                    self._last_set_mode = ColorMode.HS
                     self._attr_color_mode = ColorMode.HS
                     self._attr_hs_color = (hue, saturation)
                     self._attr_color_temp_kelvin = None
