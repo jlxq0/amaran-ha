@@ -108,52 +108,52 @@ class AmaranLight(LightEntity):
             return (self._hue, self._saturation)
         return None
 
-@property
-def color_mode(self):
-    """Return current color mode."""
-    # Check actual saturation value to determine mode
-    if self._saturation is not None and self._saturation > 10:  # Lowered threshold
-        return ColorMode.HS
-    return ColorMode.COLOR_TEMP
+    @property
+    def color_mode(self):
+        """Return current color mode."""
+        # Check actual saturation value to determine mode
+        if self._saturation is not None and self._saturation > 10:  # Lowered threshold
+            return ColorMode.HS
+        return ColorMode.COLOR_TEMP
 
-@property
-def color_temp_kelvin(self) -> Optional[int]:
-    """Return color temperature in Kelvin."""
-    # Always return CCT if we're not in a saturated color mode
-    if self._saturation is None or self._saturation <= 10:
-        return self._cct
-    return None
+    @property
+    def color_temp_kelvin(self) -> Optional[int]:
+        """Return color temperature in Kelvin."""
+        # Always return CCT if we're not in a saturated color mode
+        if self._saturation is None or self._saturation <= 10:
+            return self._cct
+        return None
 
-async def async_update(self):
-    """Update device state."""
-    try:
-        state = await self._api.get_device_state(self._device_id)
-        _LOGGER.debug(f"Raw state from API: {state}")
+    async def async_update(self):
+        """Update device state."""
+        try:
+            state = await self._api.get_device_state(self._device_id)
+            _LOGGER.debug(f"Raw state from API: {state}")
 
-        if state:
-            self._available = True
-            self._state = state.get("is_on", False)
-            self._brightness = state.get("brightness", 0)
-            self._cct = state.get("cct", 5500)
-            self._gm = state.get("gm", 0)
+            if state:
+                self._available = True
+                self._state = state.get("is_on", False)
+                self._brightness = state.get("brightness", 0)
+                self._cct = state.get("cct", 5500)
+                self._gm = state.get("gm", 0)
 
-            # Always store the HSI values
-            self._hue = state.get("hue", 0)
-            self._saturation = state.get("sat", 0)
+                # Always store the HSI values
+                self._hue = state.get("hue", 0)
+                self._saturation = state.get("sat", 0)
 
-            # Determine color mode based on saturation
-            if self._saturation > 10:  # Low saturation means CCT mode
-                self._attr_color_mode = ColorMode.HS
+                # Determine color mode based on saturation
+                if self._saturation > 10:  # Low saturation means CCT mode
+                    self._attr_color_mode = ColorMode.HS
+                else:
+                    self._attr_color_mode = ColorMode.COLOR_TEMP
             else:
-                self._attr_color_mode = ColorMode.COLOR_TEMP
-        else:
+                self._available = False
+
+            _LOGGER.debug(f"HA mode: {self._attr_color_mode}, hue: {self._hue}, sat: {self._saturation}, cct: {self._cct}, brightness: {self._brightness}")
+
+        except Exception as e:
+            _LOGGER.error(f"Error updating {self._device_id}: {e}")
             self._available = False
-
-        _LOGGER.debug(f"HA mode: {self._attr_color_mode}, hue: {self._hue}, sat: {self._saturation}, cct: {self._cct}, brightness: {self._brightness}")
-
-    except Exception as e:
-        _LOGGER.error(f"Error updating {self._device_id}: {e}")
-        self._available = False
 
     @property
     def min_color_temp_kelvin(self) -> int:
