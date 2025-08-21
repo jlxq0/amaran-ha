@@ -84,10 +84,12 @@ class AmaranLight(LightEntity):
         return int(self._brightness * 2.55)  # Convert 0-100 to 0-255
 
     @property
-    def hs_color(self) -> Optional[tuple]:
-        """Return HS color."""
+    def hs_color(self):
+        """Return the HS color."""
         if self._attr_color_mode == ColorMode.HS:
-            return (self._hue, self._saturation)
+            # Normalize hue to 0-359 range
+            hue = self._hue % 360
+            return (hue, self._saturation)
         return None
 
     @property
