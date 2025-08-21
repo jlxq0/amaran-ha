@@ -53,6 +53,7 @@ class AmaranLight(LightEntity):
     async def async_update(self):
         """Update device state."""
         state = await self._api.get_device_state(self._device_id)
+        _LOGGER.debug(f"Raw state from API: {state}")
         if state:
             self._state = state.get("is_on", False)
             self._brightness = state.get("brightness", 0)
@@ -70,6 +71,7 @@ class AmaranLight(LightEntity):
                 self._attr_color_mode = ColorMode.COLOR_TEMP
                 self._hue = 0
                 self._saturation = 0
+        _LOGGER.debug(f"HA hs_color: {self._hs_color}, brightness: {self._brightness}")
 
     @property
     def is_on(self) -> bool:
