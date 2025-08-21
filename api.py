@@ -180,6 +180,15 @@ class AmaranAPI:
             state["cct"] = cct_response["data"].get("cct", 5500)
             state["gm"] = cct_response["data"].get("gm", 0)
 
+        # Get HSI if available
+        hsi_response = await self._send_request("get_hsi", device_id)
+        if hsi_response and hsi_response.get("data"):
+            state["hue"] = hsi_response["data"].get("hue", 0)
+            state["sat"] = hsi_response["data"].get("sat", 0)
+            state["mode"] = "hsi"
+        else:
+            state["mode"] = "cct"
+
         return state
 
     async def set_power(self, device_id: str, on: bool):

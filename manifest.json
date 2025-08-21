@@ -1,9 +1,9 @@
 {
   "domain": "amaran",
   "name": "Amaran Lighting",
-  "codeowners": ["@yourusername"],
+  "codeowners": ["@jlxq0"],
   "config_flow": true,
-  "documentation": "https://github.com/yourusername/amaran-ha",
+  "documentation": "https://github.com/jlxq0/amaran-ha",
   "iot_class": "local_push",
   "requirements": ["websocket-client==1.6.1", "pycryptodome==3.20.0"],
   "version": "2.0.0"

@@ -59,6 +59,14 @@ class AmaranLight(LightEntity):
             self._cct = state.get("cct", 5500)
             self._gm = state.get("gm", 0)
 
+            # Update color mode and values based on device state
+            if state.get("mode") == "hsi":
+                self._attr_color_mode = ColorMode.HS
+                self._hue = state.get("hue", 0)
+                self._saturation = state.get("sat", 0)
+            else:
+                self._attr_color_mode = ColorMode.COLOR_TEMP
+
     @property
     def is_on(self) -> bool:
         """Return true if light is on."""
@@ -104,9 +112,11 @@ class AmaranLight(LightEntity):
         if ATTR_HS_COLOR in kwargs:
             hue, saturation = kwargs[ATTR_HS_COLOR]
             self._attr_color_mode = ColorMode.HS
-            # Pass current brightness as intensity
-            current_intensity = int((self._brightness / 100) * 1000) if self._brightness else 1000
-            await self._api.set_hsi(self._device_id, int(hue), int(saturation), current_intensity)
+            self._hue = hue  # Store for UI display
+            self._saturation = saturation
+            # For better color accuracy, use lower intensity for saturated colors
+            intensity = int((saturation / 100) * 1000)  # Map saturation to intensity
+            await self._api.set_hsi(self._device_id, int(hue), int(saturation), intensity)
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
             self._attr_color_mode = ColorMode.COLOR_TEMP
