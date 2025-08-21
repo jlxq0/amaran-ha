@@ -86,11 +86,18 @@ class AmaranLight(LightEntity):
     @property
     def hs_color(self):
         """Return the HS color."""
-        if self._attr_color_mode == ColorMode.HS:
-            # Normalize hue to 0-359 range
-            hue = self._hue % 360
-            return (hue, self._saturation)
+        # Always return HSI values if we have them
+        if self._hue is not None and self._saturation is not None:
+            return (self._hue, self._saturation)
         return None
+
+    @property
+    def color_mode(self):
+        """Return current color mode."""
+        # Report HS mode if we have valid color data
+        if self._saturation and self._saturation > 0:
+            return ColorMode.HS
+        return ColorMode.COLOR_TEMP
 
     @property
     def color_temp_kelvin(self) -> Optional[int]:
