@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure Amaran",
+        "data": {
+          "api_key": "API Key (Base64)",
+          "host": "Host IP Address",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Amaran WebSocket"
+    }
+  }
+}
