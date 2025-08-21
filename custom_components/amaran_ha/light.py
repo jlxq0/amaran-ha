@@ -109,28 +109,28 @@ class AmaranLight(LightEntity):
         """Return maximum color temp."""
         return 10000
 
-async def async_turn_on(self, **kwargs: Any) -> None:
-    """Turn on light."""
-    _LOGGER.debug(f"async_turn_on called with kwargs: {kwargs}")
-    await self._api.set_power(self._device_id, True)
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on light."""
+        _LOGGER.debug(f"async_turn_on called with kwargs: {kwargs}")
+        await self._api.set_power(self._device_id, True)
 
-    if ATTR_BRIGHTNESS in kwargs:
-        brightness = int(kwargs[ATTR_BRIGHTNESS] / 2.55)
-        await self._api.set_brightness(self._device_id, brightness)
+        if ATTR_BRIGHTNESS in kwargs:
+            brightness = int(kwargs[ATTR_BRIGHTNESS] / 2.55)
+            await self._api.set_brightness(self._device_id, brightness)
 
-    if ATTR_HS_COLOR in kwargs:
-        hue, saturation = kwargs[ATTR_HS_COLOR]
-        _LOGGER.debug(f"Setting HSI: H={hue}, S={saturation}")
-        self._attr_color_mode = ColorMode.HS
-        self._hue = hue
-        self._saturation = saturation
-        current_brightness = self._brightness if self._brightness > 0 else 100
-        await self._api.set_hsi(self._device_id, int(hue), int(saturation), int(current_brightness * 10))
+        if ATTR_HS_COLOR in kwargs:
+            hue, saturation = kwargs[ATTR_HS_COLOR]
+            _LOGGER.debug(f"Setting HSI: H={hue}, S={saturation}")
+            self._attr_color_mode = ColorMode.HS
+            self._hue = hue
+            self._saturation = saturation
+            current_brightness = self._brightness if self._brightness > 0 else 100
+            await self._api.set_hsi(self._device_id, int(hue), int(saturation), int(current_brightness * 10))
 
-    if ATTR_COLOR_TEMP_KELVIN in kwargs:
-        _LOGGER.debug(f"Setting CCT: {kwargs[ATTR_COLOR_TEMP_KELVIN]}K")
-        self._attr_color_mode = ColorMode.COLOR_TEMP
-        await self._api.set_cct(self._device_id, kwargs[ATTR_COLOR_TEMP_KELVIN])
+        if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            _LOGGER.debug(f"Setting CCT: {kwargs[ATTR_COLOR_TEMP_KELVIN]}K")
+            self._attr_color_mode = ColorMode.COLOR_TEMP
+            await self._api.set_cct(self._device_id, kwargs[ATTR_COLOR_TEMP_KELVIN])
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off light."""
