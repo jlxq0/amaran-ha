@@ -112,11 +112,11 @@ class AmaranLight(LightEntity):
         if ATTR_HS_COLOR in kwargs:
             hue, saturation = kwargs[ATTR_HS_COLOR]
             self._attr_color_mode = ColorMode.HS
-            self._hue = hue  # Store for UI display
+            self._hue = hue
             self._saturation = saturation
-            # For better color accuracy, use lower intensity for saturated colors
-            intensity = int((saturation / 100) * 1000)  # Map saturation to intensity
-            await self._api.set_hsi(self._device_id, int(hue), int(saturation), intensity)
+            # Use current brightness, not saturation for intensity
+            current_brightness = self._brightness if self._brightness > 0 else 100
+            await self._api.set_hsi(self._device_id, int(hue), int(saturation), int(current_brightness * 10))
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
             self._attr_color_mode = ColorMode.COLOR_TEMP
