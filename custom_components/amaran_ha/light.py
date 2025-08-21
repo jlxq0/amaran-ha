@@ -71,7 +71,7 @@ class AmaranLight(LightEntity):
                 self._attr_color_mode = ColorMode.COLOR_TEMP
                 self._hue = 0
                 self._saturation = 0
-        _LOGGER.debug(f"HA hs_color: {self._hs_color}, brightness: {self._brightness}")
+        _LOGGER.debug(f"HA hue: {self._hue}, sat: {self._saturation}, brightness: {self._brightness}")
 
     @property
     def is_on(self) -> bool:
