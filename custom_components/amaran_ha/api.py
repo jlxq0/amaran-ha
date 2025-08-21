@@ -51,12 +51,10 @@ class AmaranAPI:
     async def connect(self) -> bool:
         """Connect to WebSocket."""
         async with self._reconnect_lock:
-            # If already connected, return True
             if self.connected and self.ws:
                 return True
 
             try:
-                # Clean up any existing connection
                 if self.ws:
                     try:
                         self.ws.close()
@@ -82,7 +80,6 @@ class AmaranAPI:
                 for _ in range(10):
                     if self.connected:
                         await self._discover_devices()
-                        # Start heartbeat task if not already running
                         if not self._heartbeat_task or self._heartbeat_task.done():
                             self._heartbeat_task = asyncio.create_task(self._heartbeat())
                         return True
@@ -105,9 +102,8 @@ class AmaranAPI:
         """Send periodic heartbeat to keep connection alive."""
         while self.connected:
             try:
-                await asyncio.sleep(30)  # Wait 30 seconds between heartbeats
+                await asyncio.sleep(30)
                 if self.connected and self.ws:
-                    # Send a lightweight request to keep connection alive
                     response = await self._send_request("get_device_list", skip_reconnect=True)
                     if response is None:
                         _LOGGER.warning("Heartbeat failed, connection may be lost")
@@ -129,16 +125,13 @@ class AmaranAPI:
             data = json.loads(message)
             _LOGGER.debug(f"Received: {data}")
 
-            # Handle response to our requests
             request_id = data.get("request_id")
             if request_id and request_id in self._pending_requests:
                 self._pending_requests[request_id] = data
 
-            # Handle device list response
             if data.get("action") == "get_device_list" and data.get("data"):
                 self._handle_device_list(data["data"])
 
-            # Notify callbacks
             for callback in self.callbacks:
                 try:
                     callback(data)
@@ -160,7 +153,6 @@ class AmaranAPI:
 
     async def _send_request(self, action: str, node_id: str = None, args: dict = None, skip_reconnect: bool = False) -> dict:
         """Send request and wait for response."""
-        # Check connection and try to reconnect if needed (unless skipped for heartbeat)
         if not skip_reconnect:
             if not await self.ensure_connected():
                 _LOGGER.error("Cannot send request - not connected")
@@ -188,7 +180,6 @@ class AmaranAPI:
             self._pending_requests[request_id] = None
             self.ws.send(json.dumps(request))
 
-            # Wait for response
             for _ in range(50):  # 5 second timeout
                 if self._pending_requests[request_id] is not None:
                     response = self._pending_requests.pop(request_id)
@@ -233,30 +224,23 @@ class AmaranAPI:
         """Get complete device state."""
         state = {}
 
-        # Get power state
         sleep_response = await self._send_request("get_sleep", device_id)
         if sleep_response and sleep_response.get("data") is not None:
             state["is_on"] = not sleep_response["data"]
 
-        # Get brightness
         intensity_response = await self._send_request("get_intensity", device_id)
         if intensity_response and intensity_response.get("data") is not None:
             state["brightness"] = int((intensity_response["data"] / 1000) * 100)
 
-        # Get color temperature
         cct_response = await self._send_request("get_cct", device_id)
         if cct_response and cct_response.get("data"):
             state["cct"] = cct_response["data"].get("cct", 5500)
             state["gm"] = cct_response["data"].get("gm", 0)
 
-        # Get HSI if available
         hsi_response = await self._send_request("get_hsi", device_id)
         if hsi_response and hsi_response.get("data"):
             state["hue"] = hsi_response["data"].get("hue", 0)
             state["sat"] = hsi_response["data"].get("sat", 0)
-            state["mode"] = "hsi"
-        else:
-            state["mode"] = "cct"
 
         return state
 
@@ -284,11 +268,9 @@ class AmaranAPI:
         """Disconnect WebSocket."""
         self.connected = False
 
-        # Cancel heartbeat task
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
 
-        # Close WebSocket
         if self.ws:
             try:
                 self.ws.close()

@@ -24,7 +24,6 @@ async def async_setup_entry(
     """Set up Amaran lights."""
     api = hass.data[DOMAIN][config_entry.entry_id]
 
-    # Create light entities for all discovered devices
     lights = []
     for device_id, device_data in api.devices.items():
         lights.append(AmaranLight(api, device_id, device_data))
@@ -40,17 +39,22 @@ class AmaranLight(LightEntity):
         self._device_id = device_id
         self._attr_unique_id = device_id
         self._attr_name = device_data.get("name", f"Amaran {device_id}")
-        self._state = False
-        self._brightness = 0
-        self._cct = 5500
+
+        # State attributes
+        self._attr_is_on = False
+        self._attr_brightness = 0
+        self._attr_color_temp_kelvin = 5500
+        self._attr_hs_color = None
         self._gm = 0
-        self._hue = 0
-        self._saturation = 0
         self._available = True
 
-        # Set supported features
+        # Color mode tracking
         self._attr_supported_color_modes = {ColorMode.COLOR_TEMP, ColorMode.HS}
         self._attr_color_mode = ColorMode.COLOR_TEMP
+
+        # Temperature bounds
+        self._attr_min_color_temp_kelvin = 2000
+        self._attr_max_color_temp_kelvin = 10000
 
     @property
     def available(self) -> bool:
@@ -65,147 +69,102 @@ class AmaranLight(LightEntity):
 
             if state:
                 self._available = True
-                self._state = state.get("is_on", False)
-                self._brightness = state.get("brightness", 0)
-                self._cct = state.get("cct", 5500)
+                self._attr_is_on = state.get("is_on", False)
+
+                # Update brightness (convert from 0-100 to 0-255)
+                brightness_percent = state.get("brightness", 0)
+                self._attr_brightness = int(brightness_percent * 2.55)
+
+                # Always store both CCT and HSI values from device
+                cct = state.get("cct", 5500)
+                hue = state.get("hue", 0)
+                sat = state.get("sat", 0)
                 self._gm = state.get("gm", 0)
 
-                # Check if we're actually in HSI mode by looking at saturation
-                # CCT mode returns bogus HSI values with low saturation
-                if state.get("mode") == "hsi" or state.get("sat", 0) > 70:
-                    self._attr_color_mode = ColorMode.HS
-                    self._hue = state.get("hue", 0)
-                    self._saturation = state.get("sat", 0)
-                else:
-                    # In CCT mode - don't use the bogus HSI values
+                # Determine active color mode based on saturation
+                # Low saturation indicates CCT mode
+                if sat <= 10:
                     self._attr_color_mode = ColorMode.COLOR_TEMP
-                    self._hue = 0
-                    self._saturation = 0
+                    self._attr_color_temp_kelvin = cct
+                    self._attr_hs_color = None
+                else:
+                    self._attr_color_mode = ColorMode.HS
+                    self._attr_hs_color = (hue, sat)
+                    self._attr_color_temp_kelvin = None
+
+                _LOGGER.debug(
+                    f"Updated state - Mode: {self._attr_color_mode}, "
+                    f"CCT: {self._attr_color_temp_kelvin}, "
+                    f"HS: {self._attr_hs_color}, "
+                    f"Brightness: {brightness_percent}%"
+                )
             else:
                 self._available = False
-
-            _LOGGER.debug(f"HA hue: {self._hue}, sat: {self._saturation}, brightness: {self._brightness}")
 
         except Exception as e:
             _LOGGER.error(f"Error updating {self._device_id}: {e}")
             self._available = False
-
-    @property
-    def is_on(self) -> bool:
-        """Return true if light is on."""
-        return self._state
-
-    @property
-    def brightness(self) -> Optional[int]:
-        """Return brightness."""
-        return int(self._brightness * 2.55)  # Convert 0-100 to 0-255
-
-    @property
-    def hs_color(self):
-        """Return the HS color."""
-        # Always return HSI values if we have them
-        if self._hue is not None and self._saturation is not None:
-            return (self._hue, self._saturation)
-        return None
-
-    @property
-    def color_mode(self):
-        """Return current color mode."""
-        # Check actual saturation value to determine mode
-        if self._saturation is not None and self._saturation > 10:  # Lowered threshold
-            return ColorMode.HS
-        return ColorMode.COLOR_TEMP
-
-    @property
-    def color_temp_kelvin(self) -> Optional[int]:
-        """Return color temperature in Kelvin."""
-        # Always return CCT if we're not in a saturated color mode
-        if self._saturation is None or self._saturation <= 10:
-            return self._cct
-        return None
-
-    async def async_update(self):
-        """Update device state."""
-        try:
-            state = await self._api.get_device_state(self._device_id)
-            _LOGGER.debug(f"Raw state from API: {state}")
-
-            if state:
-                self._available = True
-                self._state = state.get("is_on", False)
-                self._brightness = state.get("brightness", 0)
-                self._cct = state.get("cct", 5500)
-                self._gm = state.get("gm", 0)
-
-                # Always store the HSI values
-                self._hue = state.get("hue", 0)
-                self._saturation = state.get("sat", 0)
-
-                # Determine color mode based on saturation
-                if self._saturation > 10:  # Low saturation means CCT mode
-                    self._attr_color_mode = ColorMode.HS
-                else:
-                    self._attr_color_mode = ColorMode.COLOR_TEMP
-            else:
-                self._available = False
-
-            _LOGGER.debug(f"HA mode: {self._attr_color_mode}, hue: {self._hue}, sat: {self._saturation}, cct: {self._cct}, brightness: {self._brightness}")
-
-        except Exception as e:
-            _LOGGER.error(f"Error updating {self._device_id}: {e}")
-            self._available = False
-
-    @property
-    def min_color_temp_kelvin(self) -> int:
-        """Return minimum color temp."""
-        return 2000
-
-    @property
-    def max_color_temp_kelvin(self) -> int:
-        """Return maximum color temp."""
-        return 10000
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn on light."""
+        """Turn on light with proper dual mode handling."""
         _LOGGER.debug(f"async_turn_on called with kwargs: {kwargs}")
 
         try:
-            # Ensure we're connected before sending commands
             if not await self._api.ensure_connected():
                 raise HomeAssistantError(f"Cannot connect to Amaran light {self._device_id}")
 
-            # Turn on the light
-            result = await self._api.set_power(self._device_id, True)
-            if result is None:
-                raise HomeAssistantError(f"Failed to turn on {self._device_id}")
-
-            # Set brightness if specified
-            if ATTR_BRIGHTNESS in kwargs:
-                brightness = int(kwargs[ATTR_BRIGHTNESS] / 2.55)
-                result = await self._api.set_brightness(self._device_id, brightness)
+            # Turn on if not already on
+            if not self._attr_is_on:
+                result = await self._api.set_power(self._device_id, True)
                 if result is None:
-                    _LOGGER.warning(f"Failed to set brightness for {self._device_id}")
+                    raise HomeAssistantError(f"Failed to turn on {self._device_id}")
+                self._attr_is_on = True
 
-            # Set HSI color if specified
-            if ATTR_HS_COLOR in kwargs:
-                hue, saturation = kwargs[ATTR_HS_COLOR]
-                _LOGGER.debug(f"Setting HSI: H={hue}, S={saturation}")
-                self._attr_color_mode = ColorMode.HS
-                self._hue = hue
-                self._saturation = saturation
-                current_brightness = self._brightness if self._brightness > 0 else 100
-                result = await self._api.set_hsi(self._device_id, int(hue), int(saturation), int(current_brightness * 10))
-                if result is None:
-                    _LOGGER.warning(f"Failed to set HSI color for {self._device_id}")
-
-            # Set color temperature if specified
+            # Handle color temperature changes
             if ATTR_COLOR_TEMP_KELVIN in kwargs:
-                _LOGGER.debug(f"Setting CCT: {kwargs[ATTR_COLOR_TEMP_KELVIN]}K")
-                self._attr_color_mode = ColorMode.COLOR_TEMP
-                result = await self._api.set_cct(self._device_id, kwargs[ATTR_COLOR_TEMP_KELVIN])
+                kelvin = kwargs[ATTR_COLOR_TEMP_KELVIN]
+                _LOGGER.debug(f"Setting CCT: {kelvin}K")
+
+                result = await self._api.set_cct(self._device_id, kelvin)
                 if result is None:
                     _LOGGER.warning(f"Failed to set color temperature for {self._device_id}")
+                else:
+                    # Update state for COLOR_TEMP mode
+                    self._attr_color_mode = ColorMode.COLOR_TEMP
+                    self._attr_color_temp_kelvin = kelvin
+                    self._attr_hs_color = None
 
+            # Handle HSI color changes
+            elif ATTR_HS_COLOR in kwargs:
+                hue, saturation = kwargs[ATTR_HS_COLOR]
+                _LOGGER.debug(f"Setting HSI: H={hue}, S={saturation}")
+
+                # Calculate intensity from current brightness
+                brightness_percent = int(self._attr_brightness / 2.55) if self._attr_brightness else 100
+                intensity = int(brightness_percent * 10)
+
+                result = await self._api.set_hsi(self._device_id, int(hue), int(saturation), intensity)
+                if result is None:
+                    _LOGGER.warning(f"Failed to set HSI color for {self._device_id}")
+                else:
+                    # Update state for HS mode
+                    self._attr_color_mode = ColorMode.HS
+                    self._attr_hs_color = (hue, saturation)
+                    self._attr_color_temp_kelvin = None
+
+            # Handle brightness changes (independent of color mode)
+            if ATTR_BRIGHTNESS in kwargs:
+                brightness = kwargs[ATTR_BRIGHTNESS]
+                brightness_percent = int(brightness / 2.55)
+
+                result = await self._api.set_brightness(self._device_id, brightness_percent)
+                if result is None:
+                    _LOGGER.warning(f"Failed to set brightness for {self._device_id}")
+                else:
+                    self._attr_brightness = brightness
+
+            # Notify Home Assistant of state changes
+            self.async_write_ha_state()
             self._available = True
 
         except Exception as e:
@@ -216,7 +175,6 @@ class AmaranLight(LightEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off light."""
         try:
-            # Ensure we're connected before sending commands
             if not await self._api.ensure_connected():
                 raise HomeAssistantError(f"Cannot connect to Amaran light {self._device_id}")
 
@@ -224,6 +182,8 @@ class AmaranLight(LightEntity):
             if result is None:
                 raise HomeAssistantError(f"Failed to turn off {self._device_id}")
 
+            self._attr_is_on = False
+            self.async_write_ha_state()
             self._available = True
 
         except Exception as e:
