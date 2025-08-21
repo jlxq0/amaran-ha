@@ -128,9 +128,16 @@ class AmaranLight(LightEntity):
             await self._api.set_hsi(self._device_id, int(hue), int(saturation), int(current_brightness * 10))
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
-            _LOGGER.debug(f"Setting CCT: {kwargs[ATTR_COLOR_TEMP_KELVIN]}K")
-            self._attr_color_mode = ColorMode.COLOR_TEMP
-            await self._api.set_cct(self._device_id, kwargs[ATTR_COLOR_TEMP_KELVIN])
+            # Check if we're actually in HSI mode with valid color
+            if self._attr_color_mode == ColorMode.HS and self._saturation > 0:
+                # Stay in HSI mode, just update brightness if needed
+                _LOGGER.debug(f"Ignoring CCT {kwargs[ATTR_COLOR_TEMP_KELVIN]}K, keeping HSI mode")
+                return
+            else:
+                # Actually switch to CCT
+                _LOGGER.debug(f"Setting CCT: {kwargs[ATTR_COLOR_TEMP_KELVIN]}K")
+                self._attr_color_mode = ColorMode.COLOR_TEMP
+                await self._api.set_cct(self._device_id, kwargs[ATTR_COLOR_TEMP_KELVIN])
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off light."""
