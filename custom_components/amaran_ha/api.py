@@ -27,6 +27,8 @@ class AmaranAPI:
         self._request_id = 0
         self._client_id = 1
         self._pending_requests = {}
+        self._heartbeat_task = None
+        self._reconnect_lock = asyncio.Lock()
 
     def _get_next_request_id(self) -> int:
         """Get next request ID."""
@@ -48,32 +50,73 @@ class AmaranAPI:
 
     async def connect(self) -> bool:
         """Connect to WebSocket."""
-        try:
-            url = f"ws://{self.host}:{self.port}"
-            self.ws = websocket.WebSocketApp(
-                url,
-                on_open=self._on_open,
-                on_message=self._on_message,
-                on_error=self._on_error,
-                on_close=self._on_close
-            )
+        async with self._reconnect_lock:
+            # If already connected, return True
+            if self.connected and self.ws:
+                return True
 
-            # Run WebSocket in separate thread
-            self.ws_thread = Thread(target=self.ws.run_forever)
-            self.ws_thread.daemon = True
-            self.ws_thread.start()
+            try:
+                # Clean up any existing connection
+                if self.ws:
+                    try:
+                        self.ws.close()
+                    except:
+                        pass
+                    self.ws = None
 
-            # Wait for connection
-            for _ in range(10):
-                if self.connected:
-                    await self._discover_devices()
-                    return True
-                await asyncio.sleep(0.5)
+                url = f"ws://{self.host}:{self.port}"
+                self.ws = websocket.WebSocketApp(
+                    url,
+                    on_open=self._on_open,
+                    on_message=self._on_message,
+                    on_error=self._on_error,
+                    on_close=self._on_close
+                )
 
-            return False
-        except Exception as e:
-            _LOGGER.error(f"Connection failed: {e}")
-            return False
+                # Run WebSocket in separate thread
+                self.ws_thread = Thread(target=self.ws.run_forever)
+                self.ws_thread.daemon = True
+                self.ws_thread.start()
+
+                # Wait for connection
+                for _ in range(10):
+                    if self.connected:
+                        await self._discover_devices()
+                        # Start heartbeat task if not already running
+                        if not self._heartbeat_task or self._heartbeat_task.done():
+                            self._heartbeat_task = asyncio.create_task(self._heartbeat())
+                        return True
+                    await asyncio.sleep(0.5)
+
+                return False
+            except Exception as e:
+                _LOGGER.error(f"Connection failed: {e}")
+                return False
+
+    async def ensure_connected(self) -> bool:
+        """Ensure WebSocket is connected, reconnect if necessary."""
+        if self.connected and self.ws:
+            return True
+
+        _LOGGER.info("WebSocket disconnected, attempting to reconnect...")
+        return await self.connect()
+
+    async def _heartbeat(self):
+        """Send periodic heartbeat to keep connection alive."""
+        while self.connected:
+            try:
+                await asyncio.sleep(30)  # Wait 30 seconds between heartbeats
+                if self.connected and self.ws:
+                    # Send a lightweight request to keep connection alive
+                    response = await self._send_request("get_device_list", skip_reconnect=True)
+                    if response is None:
+                        _LOGGER.warning("Heartbeat failed, connection may be lost")
+                        self.connected = False
+                        break
+            except Exception as e:
+                _LOGGER.error(f"Heartbeat error: {e}")
+                self.connected = False
+                break
 
     def _on_open(self, ws):
         """Handle WebSocket open."""
@@ -95,20 +138,36 @@ class AmaranAPI:
             if data.get("action") == "get_device_list" and data.get("data"):
                 self._handle_device_list(data["data"])
 
+            # Notify callbacks
+            for callback in self.callbacks:
+                try:
+                    callback(data)
+                except Exception as e:
+                    _LOGGER.error(f"Callback error: {e}")
+
         except Exception as e:
             _LOGGER.error(f"Message handling error: {e}")
 
     def _on_error(self, ws, error):
         """Handle WebSocket errors."""
         _LOGGER.error(f"WebSocket error: {error}")
+        self.connected = False
 
     def _on_close(self, ws, close_status_code, close_msg):
         """Handle WebSocket close."""
         self.connected = False
-        _LOGGER.info("WebSocket disconnected")
+        _LOGGER.info(f"WebSocket disconnected: {close_status_code} - {close_msg}")
 
-    async def _send_request(self, action: str, node_id: str = None, args: dict = None) -> dict:
+    async def _send_request(self, action: str, node_id: str = None, args: dict = None, skip_reconnect: bool = False) -> dict:
         """Send request and wait for response."""
+        # Check connection and try to reconnect if needed (unless skipped for heartbeat)
+        if not skip_reconnect:
+            if not await self.ensure_connected():
+                _LOGGER.error("Cannot send request - not connected")
+                return None
+        elif not self.connected or not self.ws:
+            return None
+
         request_id = self._get_next_request_id()
 
         request = {
@@ -125,26 +184,36 @@ class AmaranAPI:
         if args:
             request["args"] = args
 
-        self._pending_requests[request_id] = None
-        self.ws.send(json.dumps(request))
+        try:
+            self._pending_requests[request_id] = None
+            self.ws.send(json.dumps(request))
 
-        # Wait for response
-        for _ in range(50):  # 5 second timeout
-            if self._pending_requests[request_id] is not None:
-                response = self._pending_requests.pop(request_id)
-                if response.get("code") == 0:
-                    return response
-                else:
-                    _LOGGER.error(f"Request failed: {response}")
-                    return None
-            await asyncio.sleep(0.1)
+            # Wait for response
+            for _ in range(50):  # 5 second timeout
+                if self._pending_requests[request_id] is not None:
+                    response = self._pending_requests.pop(request_id)
+                    if response.get("code") == 0:
+                        return response
+                    else:
+                        _LOGGER.error(f"Request failed: {response}")
+                        return None
+                await asyncio.sleep(0.1)
 
-        self._pending_requests.pop(request_id, None)
-        return None
+            self._pending_requests.pop(request_id, None)
+            _LOGGER.warning(f"Request timeout for action: {action}")
+            return None
+
+        except websocket.WebSocketConnectionClosedException:
+            _LOGGER.error("WebSocket connection closed during request")
+            self.connected = False
+            return None
+        except Exception as e:
+            _LOGGER.error(f"Error sending request: {e}")
+            return None
 
     async def _discover_devices(self):
         """Discover all devices."""
-        response = await self._send_request("get_device_list")
+        response = await self._send_request("get_device_list", skip_reconnect=True)
         if response and response.get("data"):
             self._handle_device_list(response["data"])
 
@@ -193,25 +262,37 @@ class AmaranAPI:
 
     async def set_power(self, device_id: str, on: bool):
         """Set device power state."""
-        await self._send_request("set_sleep", device_id, {"sleep": not on})
+        return await self._send_request("set_sleep", device_id, {"sleep": not on})
 
     async def set_brightness(self, device_id: str, brightness: int):
         """Set device brightness (0-100)."""
         intensity = int((brightness / 100) * 1000)
-        await self._send_request("set_intensity", device_id, {"intensity": intensity})
+        return await self._send_request("set_intensity", device_id, {"intensity": intensity})
 
     async def set_cct(self, device_id: str, temperature: int, gm: int = 0):
         """Set color temperature (2000-10000K) and green/magenta."""
-        await self._send_request("set_cct", device_id, {"cct": temperature, "gm": gm})
+        return await self._send_request("set_cct", device_id, {"cct": temperature, "gm": gm})
 
     async def set_hsi(self, device_id: str, hue: int, saturation: int, intensity: int = None):
         """Set HSI color."""
         args = {"hue": hue, "sat": saturation}
         if intensity is not None:
             args["intensity"] = intensity
-        await self._send_request("set_hsi", device_id, args)
+        return await self._send_request("set_hsi", device_id, args)
 
     def disconnect(self):
         """Disconnect WebSocket."""
+        self.connected = False
+
+        # Cancel heartbeat task
+        if self._heartbeat_task and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+
+        # Close WebSocket
         if self.ws:
-            self.ws.close()
+            try:
+                self.ws.close()
+            except Exception as e:
+                _LOGGER.error(f"Error closing WebSocket: {e}")
+            finally:
+                self.ws = None
