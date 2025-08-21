@@ -59,13 +59,17 @@ class AmaranLight(LightEntity):
             self._cct = state.get("cct", 5500)
             self._gm = state.get("gm", 0)
 
-            # Update color mode and values based on device state
-            if state.get("mode") == "hsi":
+            # Check if we're actually in HSI mode by looking at saturation
+            # CCT mode returns bogus HSI values with low saturation
+            if state.get("mode") == "hsi" or state.get("sat", 0) > 70:
                 self._attr_color_mode = ColorMode.HS
                 self._hue = state.get("hue", 0)
                 self._saturation = state.get("sat", 0)
             else:
+                # In CCT mode - don't use the bogus HSI values
                 self._attr_color_mode = ColorMode.COLOR_TEMP
+                self._hue = 0
+                self._saturation = 0
 
     @property
     def is_on(self) -> bool:
