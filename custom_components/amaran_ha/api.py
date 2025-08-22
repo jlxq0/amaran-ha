@@ -30,9 +30,8 @@ class AmaranAPI:
         self._pending_requests = {}
         self._heartbeat_task = None
         self._reconnect_lock = asyncio.Lock()
-        self._command_queue = asyncio.Queue()  # Global queue for ALL commands
-        self._queue_task = None  # Single queue processor
-        self._last_command_time = 0  # Track last command time globally
+        self._last_set_time = 0  # Track last SET command time
+        self._set_lock = asyncio.Lock()  # Serialize SET commands
 
     def _get_next_request_id(self) -> int:
         """Get next request ID."""
@@ -180,44 +179,17 @@ class AmaranAPI:
         self.connected = False
         _LOGGER.info(f"WebSocket disconnected: {close_status_code} - {close_msg}")
 
-    async def _process_command_queue(self):
-        """Process queued commands with 200ms global spacing."""
-        while True:
-            try:
-                action, node_id, args, future = await self._command_queue.get()
-
-                # Ensure 200ms spacing between ANY commands
-                now = time.time()
-                wait_time = max(0, 0.2 - (now - self._last_command_time))
-                if wait_time > 0:
-                    _LOGGER.debug(f"Waiting {wait_time:.3f}s before sending {action} to {node_id}")
-                    await asyncio.sleep(wait_time)
-
-                # Send the actual request
-                result = await self._send_request_direct(action, node_id, args)
-                future.set_result(result)
-
-                self._last_command_time = time.time()
-                self._command_queue.task_done()
-
-            except Exception as e:
-                _LOGGER.error(f"Queue processing error: {e}")
-                if 'future' in locals() and not future.done():
-                    future.set_exception(e)
-
     async def _send_request(self, action: str, node_id: str = None, args: dict = None, skip_reconnect: bool = False) -> dict:
-        """Queue request with 200ms global spacing for SET commands."""
-        # For non-device commands or gets, send directly
-        if not node_id or action.startswith("get_") or not action.startswith("set_"):
-            return await self._send_request_direct(action, node_id, args, skip_reconnect)
-
-        # Queue ALL set commands for 200ms global spacing
-        future = asyncio.Future()
-        await self._command_queue.put((action, node_id, args, future))
-        return await future
-
-    async def _send_request_direct(self, action: str, node_id: str = None, args: dict = None, skip_reconnect: bool = False) -> dict:
         """Send request and wait for response."""
+        # Serialize SET commands with 200ms delay to prevent hardware overload
+        if action.startswith("set_"):
+            async with self._set_lock:
+                now = time.time()
+                wait_time = max(0, 0.2 - (now - self._last_set_time))
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time)
+                self._last_set_time = time.time()
+
         if not skip_reconnect:
             if not await self.ensure_connected():
                 _LOGGER.error("Cannot send request - not connected")
@@ -367,10 +339,6 @@ class AmaranAPI:
 
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
-
-        # Cancel queue task
-        if self._queue_task and not self._queue_task.done():
-            self._queue_task.cancel()
 
         if self.ws:
             try:
