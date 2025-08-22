@@ -45,7 +45,7 @@ class AmaranLight(LightEntity):
         self._attr_brightness = 0
         self._attr_color_temp_kelvin = 5500
         self._attr_hs_color = None
-        self._gm = 0
+        self._gm = 100
         self._available = True
 
         # Track last set mode to ignore device's fake HSI values
@@ -82,7 +82,7 @@ class AmaranLight(LightEntity):
                 cct = state.get("cct", 5500)
                 hue = state.get("hue", 0)
                 sat = state.get("sat", 0)
-                self._gm = state.get("gm", 0)
+                self._gm = state.get("gm", 100)
 
                 # Use last explicitly set mode, don't trust device's HSI values in CCT mode
                 if self._last_set_mode == ColorMode.COLOR_TEMP:

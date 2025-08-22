@@ -164,7 +164,7 @@ class AmaranAPI:
             self.device_states[device_id]["brightness"] = int((response_data / 1000) * 100)
         elif action == "get_cct" and response_data:
             self.device_states[device_id]["cct"] = response_data.get("cct", 5500)
-            self.device_states[device_id]["gm"] = response_data.get("gm", 0)
+            self.device_states[device_id]["gm"] = response_data.get("gm", 100)
         elif action == "get_hsi" and response_data:
             self.device_states[device_id]["hue"] = response_data.get("hue", 0)
             self.device_states[device_id]["sat"] = response_data.get("sat", 0)
@@ -255,7 +255,7 @@ class AmaranAPI:
             state["brightness"] = int((args.get("intensity", 0) / 1000) * 100)
         elif action == "set_cct" and args:
             state["cct"] = args.get("cct", 5500)
-            state["gm"] = args.get("gm", 0)
+            state["gm"] = args.get("gm", 100)
         elif action == "set_hsi" and args:
             state["hue"] = args.get("hue", 0)
             state["sat"] = args.get("sat", 0)
@@ -301,7 +301,7 @@ class AmaranAPI:
         cct_response = await self._send_request("get_cct", device_id)
         if cct_response and cct_response.get("data"):
             state["cct"] = cct_response["data"].get("cct", 5500)
-            state["gm"] = cct_response["data"].get("gm", 0)
+            state["gm"] = cct_response["data"].get("gm", 100)
 
         hsi_response = await self._send_request("get_hsi", device_id)
         if hsi_response and hsi_response.get("data"):
@@ -322,7 +322,7 @@ class AmaranAPI:
         intensity = int((brightness / 100) * 1000)
         return await self._send_request("set_intensity", device_id, {"intensity": intensity})
 
-    async def set_cct(self, device_id: str, temperature: int, gm: int = 0):
+    async def set_cct(self, device_id: str, temperature: int, gm: int = 100):
         """Set color temperature (2000-10000K) and green/magenta."""
         return await self._send_request("set_cct", device_id, {"cct": temperature, "gm": gm})
 
