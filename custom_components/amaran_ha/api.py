@@ -22,6 +22,7 @@ class AmaranAPI:
         self.api_key = api_key
         self.ws = None
         self.devices = {}
+        self.device_states = {}  # Track actual device states
         self.callbacks = []
         self.connected = False
         self._request_id = 0
@@ -129,6 +130,10 @@ class AmaranAPI:
             if request_id and request_id in self._pending_requests:
                 self._pending_requests[request_id] = data
 
+            # Update cached state based on successful commands
+            if data.get("code") == 0 and data.get("node_id"):
+                self._update_cached_state(data)
+
             if data.get("action") == "get_device_list" and data.get("data"):
                 self._handle_device_list(data["data"])
 
@@ -140,6 +145,27 @@ class AmaranAPI:
 
         except Exception as e:
             _LOGGER.error(f"Message handling error: {e}")
+
+    def _update_cached_state(self, data):
+        """Update cached device state from response."""
+        device_id = data.get("node_id")
+        if not device_id or device_id not in self.device_states:
+            return
+
+        action = data.get("action")
+        response_data = data.get("data")
+
+        # Update state based on successful responses
+        if action == "get_sleep" and response_data is not None:
+            self.device_states[device_id]["is_on"] = not response_data
+        elif action == "get_intensity" and response_data is not None:
+            self.device_states[device_id]["brightness"] = int((response_data / 1000) * 100)
+        elif action == "get_cct" and response_data:
+            self.device_states[device_id]["cct"] = response_data.get("cct", 5500)
+            self.device_states[device_id]["gm"] = response_data.get("gm", 0)
+        elif action == "get_hsi" and response_data:
+            self.device_states[device_id]["hue"] = response_data.get("hue", 0)
+            self.device_states[device_id]["sat"] = response_data.get("sat", 0)
 
     def _on_error(self, ws, error):
         """Handle WebSocket errors."""
@@ -184,6 +210,9 @@ class AmaranAPI:
                 if self._pending_requests[request_id] is not None:
                     response = self._pending_requests.pop(request_id)
                     if response.get("code") == 0:
+                        # Update cached state for set commands
+                        if node_id and action.startswith("set_"):
+                            self._update_state_from_command(node_id, action, args)
                         return response
                     else:
                         _LOGGER.error(f"Request failed: {response}")
@@ -202,6 +231,26 @@ class AmaranAPI:
             _LOGGER.error(f"Error sending request: {e}")
             return None
 
+    def _update_state_from_command(self, device_id: str, action: str, args: dict):
+        """Update cached state when sending commands."""
+        if device_id not in self.device_states:
+            self.device_states[device_id] = {}
+
+        state = self.device_states[device_id]
+
+        if action == "set_sleep" and args:
+            state["is_on"] = not args.get("sleep", True)
+        elif action == "set_intensity" and args:
+            state["brightness"] = int((args.get("intensity", 0) / 1000) * 100)
+        elif action == "set_cct" and args:
+            state["cct"] = args.get("cct", 5500)
+            state["gm"] = args.get("gm", 0)
+        elif action == "set_hsi" and args:
+            state["hue"] = args.get("hue", 0)
+            state["sat"] = args.get("sat", 0)
+            if "intensity" in args:
+                state["brightness"] = int((args["intensity"] / 1000) * 100)
+
     async def _discover_devices(self):
         """Discover all devices."""
         response = await self._send_request("get_device_list", skip_reconnect=True)
@@ -214,11 +263,17 @@ class AmaranAPI:
             device_id = device.get("node_id")
             if device_id and not device_id.startswith("9d75"):  # Skip "All" group
                 self.devices[device_id] = device
+                if device_id not in self.device_states:
+                    self.device_states[device_id] = {}
                 _LOGGER.info(f"Found device: {device.get('name')} ({device_id})")
 
     def register_callback(self, callback: Callable):
         """Register update callback."""
         self.callbacks.append(callback)
+
+    def get_cached_state(self, device_id: str) -> dict:
+        """Get cached device state."""
+        return self.device_states.get(device_id, {})
 
     async def get_device_state(self, device_id: str) -> dict:
         """Get complete device state."""
@@ -241,6 +296,9 @@ class AmaranAPI:
         if hsi_response and hsi_response.get("data"):
             state["hue"] = hsi_response["data"].get("hue", 0)
             state["sat"] = hsi_response["data"].get("sat", 0)
+
+        # Update cache with fresh state
+        self.device_states[device_id] = state
 
         return state
 
