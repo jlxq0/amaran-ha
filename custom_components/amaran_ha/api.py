@@ -30,6 +30,8 @@ class AmaranAPI:
         self._pending_requests = {}
         self._heartbeat_task = None
         self._reconnect_lock = asyncio.Lock()
+        self._device_queues = {}  # Queue per device for 200ms spacing
+        self._queue_tasks = {}  # Task per device queue
 
     def _get_next_request_id(self) -> int:
         """Get next request ID."""
@@ -177,7 +179,51 @@ class AmaranAPI:
         self.connected = False
         _LOGGER.info(f"WebSocket disconnected: {close_status_code} - {close_msg}")
 
+    async def _process_device_queue(self, device_id: str):
+        """Process queued commands for a device with 200ms spacing."""
+        queue = self._device_queues[device_id]
+        last_command_time = 0
+
+        while True:
+            try:
+                action, node_id, args, future = await queue.get()
+
+                # Ensure 200ms spacing between commands to same device
+                now = time.time()
+                wait_time = max(0, 0.2 - (now - last_command_time))
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time)
+
+                # Send the actual request
+                result = await self._send_request_direct(action, node_id, args)
+                future.set_result(result)
+
+                last_command_time = time.time()
+                queue.task_done()
+
+            except Exception as e:
+                _LOGGER.error(f"Queue processing error for {device_id}: {e}")
+                if 'future' in locals() and not future.done():
+                    future.set_exception(e)
+
     async def _send_request(self, action: str, node_id: str = None, args: dict = None, skip_reconnect: bool = False) -> dict:
+        """Queue request for device with 200ms spacing."""
+        # For non-device commands or gets, send directly
+        if not node_id or action.startswith("get_") or not action.startswith("set_"):
+            return await self._send_request_direct(action, node_id, args, skip_reconnect)
+
+        # Queue set commands for 200ms spacing
+        if node_id not in self._device_queues:
+            self._device_queues[node_id] = asyncio.Queue()
+            self._queue_tasks[node_id] = asyncio.create_task(
+                self._process_device_queue(node_id)
+            )
+
+        future = asyncio.Future()
+        await self._device_queues[node_id].put((action, node_id, args, future))
+        return await future
+
+    async def _send_request_direct(self, action: str, node_id: str = None, args: dict = None, skip_reconnect: bool = False) -> dict:
         """Send request and wait for response."""
         if not skip_reconnect:
             if not await self.ensure_connected():
@@ -328,6 +374,11 @@ class AmaranAPI:
 
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
+
+        # Cancel all queue tasks
+        for task in self._queue_tasks.values():
+            if not task.done():
+                task.cancel()
 
         if self.ws:
             try:
