@@ -30,8 +30,9 @@ class AmaranAPI:
         self._pending_requests = {}
         self._heartbeat_task = None
         self._reconnect_lock = asyncio.Lock()
-        self._device_queues = {}  # Queue per device for 200ms spacing
-        self._queue_tasks = {}  # Task per device queue
+        self._command_queue = asyncio.Queue()  # Global queue for ALL commands
+        self._queue_task = None  # Single queue processor
+        self._last_command_time = 0  # Track last command time globally
 
     def _get_next_request_id(self) -> int:
         """Get next request ID."""
@@ -179,48 +180,40 @@ class AmaranAPI:
         self.connected = False
         _LOGGER.info(f"WebSocket disconnected: {close_status_code} - {close_msg}")
 
-    async def _process_device_queue(self, device_id: str):
-        """Process queued commands for a device with 200ms spacing."""
-        queue = self._device_queues[device_id]
-        last_command_time = 0
-
+    async def _process_command_queue(self):
+        """Process queued commands with 200ms global spacing."""
         while True:
             try:
-                action, node_id, args, future = await queue.get()
+                action, node_id, args, future = await self._command_queue.get()
 
-                # Ensure 200ms spacing between commands to same device
+                # Ensure 200ms spacing between ANY commands
                 now = time.time()
-                wait_time = max(0, 0.2 - (now - last_command_time))
+                wait_time = max(0, 0.2 - (now - self._last_command_time))
                 if wait_time > 0:
+                    _LOGGER.debug(f"Waiting {wait_time:.3f}s before sending {action} to {node_id}")
                     await asyncio.sleep(wait_time)
 
                 # Send the actual request
                 result = await self._send_request_direct(action, node_id, args)
                 future.set_result(result)
 
-                last_command_time = time.time()
-                queue.task_done()
+                self._last_command_time = time.time()
+                self._command_queue.task_done()
 
             except Exception as e:
-                _LOGGER.error(f"Queue processing error for {device_id}: {e}")
+                _LOGGER.error(f"Queue processing error: {e}")
                 if 'future' in locals() and not future.done():
                     future.set_exception(e)
 
     async def _send_request(self, action: str, node_id: str = None, args: dict = None, skip_reconnect: bool = False) -> dict:
-        """Queue request for device with 200ms spacing."""
+        """Queue request with 200ms global spacing for SET commands."""
         # For non-device commands or gets, send directly
         if not node_id or action.startswith("get_") or not action.startswith("set_"):
             return await self._send_request_direct(action, node_id, args, skip_reconnect)
 
-        # Queue set commands for 200ms spacing
-        if node_id not in self._device_queues:
-            self._device_queues[node_id] = asyncio.Queue()
-            self._queue_tasks[node_id] = asyncio.create_task(
-                self._process_device_queue(node_id)
-            )
-
+        # Queue ALL set commands for 200ms global spacing
         future = asyncio.Future()
-        await self._device_queues[node_id].put((action, node_id, args, future))
+        await self._command_queue.put((action, node_id, args, future))
         return await future
 
     async def _send_request_direct(self, action: str, node_id: str = None, args: dict = None, skip_reconnect: bool = False) -> dict:
@@ -375,10 +368,9 @@ class AmaranAPI:
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
 
-        # Cancel all queue tasks
-        for task in self._queue_tasks.values():
-            if not task.done():
-                task.cancel()
+        # Cancel queue task
+        if self._queue_task and not self._queue_task.done():
+            self._queue_task.cancel()
 
         if self.ws:
             try:
